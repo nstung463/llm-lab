@@ -65,10 +65,11 @@ class NextTokenDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
 
 
 class StatefulBatchLoader:
-    """Small resumable batch loader for the in-memory learning pipeline.
+    """Small OLMo-style resumable batch loader for the in-memory pipeline.
 
     The state includes the current shuffled order and cursor, so a checkpoint
-    resumes at the same batch instead of starting a new permutation.
+    resumes at the same batch instead of starting a new permutation. ``epoch``
+    is one-based and identifies the epoch currently being consumed.
     """
 
     def __init__(
@@ -87,7 +88,7 @@ class StatefulBatchLoader:
         self.shuffle = shuffle
         self.seed = seed
         self.drop_last = drop_last
-        self.epoch = 0
+        self.epoch = 1
         self.batch_index = 0
         self.generator = torch.Generator().manual_seed(seed)
         self.order = torch.empty(0, dtype=torch.long)
@@ -107,6 +108,19 @@ class StatefulBatchLoader:
 
     def __len__(self) -> int:
         return self._batch_count()
+
+    @property
+    def batches_in_epoch(self) -> int:
+        """Number of batches in one loader epoch."""
+        return self._batch_count()
+
+    @property
+    def tokens_per_epoch(self) -> int:
+        """Number of target tokens exposed by one complete training epoch."""
+        samples = len(self.order)
+        if self.drop_last:
+            samples = (samples // self.batch_size) * self.batch_size
+        return samples * self.dataset.context_length
 
     def _make_batch(self, indices: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         items = [self.dataset[int(index)] for index in indices]
@@ -139,6 +153,7 @@ class StatefulBatchLoader:
     def state_dict(self) -> dict[str, Any]:
         """Serialize loader position, order, RNG and dataset identity."""
         return {
+            "state_version": 2,
             "dataset_signature": self.dataset.signature,
             "dataset_size": len(self.dataset),
             "context_length": self.dataset.context_length,
@@ -149,6 +164,8 @@ class StatefulBatchLoader:
             "drop_last": self.drop_last,
             "epoch": self.epoch,
             "batch_index": self.batch_index,
+            "batches_in_epoch": self.batches_in_epoch,
+            "tokens_per_epoch": self.tokens_per_epoch,
             "order": self.order.clone(),
             "generator_state": self.generator.get_state(),
         }
@@ -170,7 +187,14 @@ class StatefulBatchLoader:
         order = torch.as_tensor(state["order"], dtype=torch.long)
         if order.numel() != len(self.dataset):
             raise ValueError("Loader state has an invalid sample order")
-        self.epoch = int(state["epoch"])
+        # Version 1 stored completed epochs with a zero-based counter. Map it
+        # to the one-based current-epoch convention when resuming old runs.
+        if int(state.get("state_version", 1)) < 2:
+            self.epoch = int(state["epoch"]) + 1
+        else:
+            self.epoch = int(state["epoch"])
+        if self.epoch <= 0:
+            raise ValueError("Loader state has an invalid epoch")
         self.batch_index = int(state["batch_index"])
         if not 0 <= self.batch_index <= self._batch_count():
             raise ValueError("Loader state has an invalid batch cursor")

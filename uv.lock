@@ -642,6 +642,7 @@ dependencies = [
     { name = "tokenizers" },
     { name = "torch", version = "2.13.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform == 'darwin'" },
     { name = "torch", version = "2.13.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform != 'darwin'" },
+    { name = "tqdm" },
 ]
 
 [package.optional-dependencies]
@@ -660,6 +661,7 @@ requires-dist = [
     { name = "tiktoken", specifier = ">=0.7" },
     { name = "tokenizers", specifier = ">=0.20" },
     { name = "torch", specifier = ">=2.2", index = "https://download.pytorch.org/whl/cpu" },
+    { name = "tqdm", specifier = ">=4.66" },
 ]
 provides-extras = ["dev", "data"]
 
