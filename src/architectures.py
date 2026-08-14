@@ -5,7 +5,7 @@ existing notebooks and commands continue to work while Phase 02 introduces
 the domain-oriented models package.
 """
 
-from .models.registry import (
+from models.registry import (
     MODEL_REGISTRY,
     available_architectures,
     build_model,

@@ -7,14 +7,14 @@ from pathlib import Path
 
 import torch
 
-from .config import ModelConfig, TrainingConfig
-from .data.datasets import make_loaders
-from .data.manifest import build_manifest
-from .data.readers import read_documents
-from .data.splits import split_documents
-from .data.tokenizer import build_tokenizer, tokenizer_from_state
-from .models.baseline import GPTModel, count_parameters
-from .training.loop import load_checkpoint, save_checkpoint, train
+from config import ModelConfig, TrainingConfig
+from data.datasets import make_loaders
+from data.manifest import build_manifest
+from data.readers import read_documents
+from data.splits import split_documents
+from data.tokenizer import build_tokenizer, tokenizer_from_state
+from models.baseline import GPTModel, count_parameters
+from training.loop import load_checkpoint, save_checkpoint, train
 
 
 TINYSTORIES_SOURCE = {

@@ -15,7 +15,7 @@ from torch import nn
 from .base import DecoderModel, ModelMetadata, as_module
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MODEL_DIR = PROJECT_ROOT / "learning_assets" / "model"
 
 

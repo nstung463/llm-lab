@@ -7,7 +7,7 @@ from typing import TypeAlias
 import torch
 from torch import Tensor, nn
 
-from .config import ModelConfig
+from config import ModelConfig
 
 PastKeyValue: TypeAlias = tuple[Tensor, Tensor]
 PastKeyValues: TypeAlias = tuple[PastKeyValue | None, ...]

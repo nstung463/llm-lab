@@ -9,14 +9,14 @@ from pathlib import Path
 
 import torch
 
-from .data import load_token_artifacts
-from .data.datasets import make_loaders
-from .data.readers import read_documents
-from .data.splits import split_documents_three
-from .data.tokenizer import tokenizer_from_state
-from .benchmarking.compute import active_parameter_count, estimate_flops
-from .evaluation.loss import evaluate_loss_stats
-from .models.registry import available_architectures, build_model, model_metadata, parameter_count
+from data import load_token_artifacts
+from data.datasets import make_loaders
+from data.readers import read_documents
+from data.splits import split_documents_three
+from data.tokenizer import tokenizer_from_state
+from benchmarking.compute import active_parameter_count, estimate_flops
+from evaluation.loss import evaluate_loss_stats
+from models.registry import available_architectures, build_model, model_metadata, parameter_count
 
 
 def evaluate(model, loader, device, max_batches: int | None):

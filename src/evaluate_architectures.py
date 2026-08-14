@@ -9,13 +9,13 @@ from pathlib import Path
 
 import torch
 
-from .data import load_token_artifacts
-from .data.datasets import make_loaders
-from .data.readers import read_documents
-from .data.splits import split_documents_three
-from .data.tokenizer import tokenizer_from_state
-from .evaluation.loss import evaluate_loss_stats
-from .models.registry import build_model
+from data import load_token_artifacts
+from data.datasets import make_loaders
+from data.readers import read_documents
+from data.splits import split_documents_three
+from data.tokenizer import tokenizer_from_state
+from evaluation.loss import evaluate_loss_stats
+from models.registry import build_model
 
 
 def main() -> None:

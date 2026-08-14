@@ -1,6 +1,6 @@
 """CLI adapter for architecture evaluation."""
 
-from ..evaluate_architectures import main
+from evaluate_architectures import main
 
 __all__ = ["main"]
 

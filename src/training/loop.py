@@ -10,9 +10,9 @@ from typing import Any
 import torch
 from torch import Tensor
 
-from ..config import TrainingConfig
-from ..evaluation.loss import token_weighted_loss
-from ..models.baseline import GPTModel
+from config import TrainingConfig
+from evaluation.loss import token_weighted_loss
+from models.baseline import GPTModel
 
 
 def loss_for_batch(model: GPTModel, inputs: Tensor, targets: Tensor) -> Tensor:

@@ -9,10 +9,10 @@ from pathlib import Path
 
 import torch
 
-from .benchmarking.compute import collect_kv_cache_stats, estimate_flops, estimate_kv_cache
-from .benchmarking.inference import run_generation, synchronize
-from .data.tokenizer import tokenizer_from_state
-from .models.registry import build_model
+from benchmarking.compute import collect_kv_cache_stats, estimate_flops, estimate_kv_cache
+from benchmarking.inference import run_generation, synchronize
+from data.tokenizer import tokenizer_from_state
+from models.registry import build_model
 
 
 def main():

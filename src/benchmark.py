@@ -10,9 +10,9 @@ from pathlib import Path
 
 import torch
 
-from .config import ModelConfig
-from .models.baseline import GPTModel, count_parameters
-from .training.loop import load_checkpoint
+from config import ModelConfig
+from models.baseline import GPTModel, count_parameters
+from training.loop import load_checkpoint
 
 
 def synchronize(device: torch.device) -> None:

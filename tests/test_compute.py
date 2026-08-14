@@ -1,6 +1,6 @@
 import torch
 
-from llm.benchmarking.compute import active_parameter_count, estimate_flops, estimate_kv_cache, estimate_training_flops
+from benchmarking.compute import active_parameter_count, estimate_flops, estimate_kv_cache, estimate_training_flops
 
 
 class _ToyDecoder(torch.nn.Module):

@@ -14,8 +14,8 @@ upstream reference. It provides a small, configurable decoder-only GPT with:
 cd D:\tiny-llm-lab\llm-lab
 $env:UV_CACHE_DIR = 'D:\tiny-llm-lab\.uv-cache' # prevents a large cache on C:
 uv sync --extra dev                              # creates .venv inside this folder
-uv run python -m llm.train --config configs/baseline_tiny.json --text data\sample.txt
-uv run python -m llm.benchmark --checkpoint runs\baseline\checkpoint.pt --new-tokens 64
+uv run python -m train --config configs/baseline_tiny.json --text data\sample.txt
+uv run python -m benchmark --checkpoint runs\baseline\checkpoint.pt --new-tokens 64
 uv run pytest
 ```
 
@@ -27,7 +27,7 @@ language capability. Replace it with a licensed corpus after the smoke run.
 New code should use the domain-oriented APIs:
 
 ```text
-src/llm/
+src/
 ├── data/          # readers, tokenizers, manifests, fixed token artifacts
 ├── models/        # baseline model API and architecture registry
 ├── training/      # baseline loop and architecture runner boundary
@@ -36,9 +36,9 @@ src/llm/
 └── cli/           # command adapters
 ```
 
-The old flat modules remain as compatibility entrypoints for existing
-notebooks and `python -m llm.<command>` invocations. New shared logic should be
-added to the subpackages rather than creating another top-level implementation.
+The flat modules are the command entrypoints used by `python -m <command>`.
+Shared logic belongs in the domain subpackages rather than in duplicate
+top-level implementations.
 
 ## TinyStories data
 
@@ -52,8 +52,8 @@ $env:HF_HOME = 'D:\tiny-llm-lab\.hf-cache'
 $env:HF_DATASETS_CACHE = 'D:\tiny-llm-lab\.hf-cache\datasets'
 $env:HF_HUB_CACHE = 'D:\tiny-llm-lab\.hf-cache\hub'
 uv sync --extra dev --extra data
-uv run python -m llm.prepare_tinystories --max-examples 10000
-uv run python -m llm.train --config configs\tinystories_tiny.json --text data\tinystories_sample.jsonl --output runs\tinystories
+uv run python -m prepare_tinystories --max-examples 10000
+uv run python -m train --config configs\tinystories_tiny.json --text data\tinystories_sample.jsonl --output runs\tinystories
 ```
 
 To continue a run, increase `training.max_steps` in a config and pass
@@ -90,7 +90,7 @@ best-model weights, and a final held-out test loss.
 Use the small configuration for an end-to-end smoke run:
 
 ```powershell
-uv run python -m llm.train_architectures `
+uv run python -m train_architectures `
   --architecture v4 `
   --config configs/architecture_tiny.json `
   --text data/sample.txt `
@@ -105,7 +105,7 @@ validation, and 10% test; the small-corpus fallback exists only for smoke tests.
 Evaluate one checkpoint:
 
 ```powershell
-uv run python -m llm.evaluate_architectures `
+uv run python -m evaluate_architectures `
   --checkpoint runs/v4_tiny/checkpoint.pt `
   --text data/sample.txt
 ```
@@ -114,7 +114,7 @@ Compare checkpoints trained with the same tokenizer, split seed, data, and
 training budget:
 
 ```powershell
-uv run python -m llm.compare_architectures `
+uv run python -m compare_architectures `
   --checkpoint-root runs `
   --text data/sample.txt
 ```
@@ -124,14 +124,14 @@ manifest instead of raw text. This loads the exact `.npy` token streams and
 rejects checkpoints with a different data contract:
 
 ```powershell
-uv run python -m llm.train_architectures `
+uv run python -m train_architectures `
   --architecture gqa `
   --config configs/colab_architecture_10m_smoke.json `
   --artifact-manifest data/tinystories_pilot_10m.manifest.json `
   --output runs/architecture_compare_gqa `
   --device cuda
 
-uv run python -m llm.compare_architectures `
+uv run python -m compare_architectures `
   --checkpoint-root runs `
   --run-prefix architecture_compare_ `
   --artifact-manifest data/tinystories_pilot_10m.manifest.json `
@@ -172,7 +172,7 @@ The config includes per-architecture overrides so MHA, GQA, MLA, MoE, and V4 sta
 Run a local smoke test:
 
 ```powershell
-uv run python -m llm.train_architectures `
+uv run python -m train_architectures `
   --architecture mha `
   --config configs/colab_architecture_10m_smoke.json `
   --text data/tinystories_architecture.jsonl `
@@ -183,7 +183,7 @@ uv run python -m llm.train_architectures `
 Run the full Colab profile after copying the dataset to the runtime-local filesystem:
 
 ```powershell
-uv run python -m llm.train_architectures `
+uv run python -m train_architectures `
   --architecture gqa `
   --config configs/colab_architecture_10m.json `
   --text data/tinystories_architecture.jsonl `

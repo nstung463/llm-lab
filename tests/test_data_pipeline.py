@@ -6,10 +6,10 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from llm.data import BPETokenizer, build_manifest, load_token_artifacts, split_documents
-from llm.data.datasets import NextTokenDataset, StatefulBatchLoader, take_token_budget
-from llm.data.readers import read_documents
-from llm.data.splits import split_documents_three
+from data import BPETokenizer, build_manifest, load_token_artifacts, split_documents
+from data.datasets import NextTokenDataset, StatefulBatchLoader, take_token_budget
+from data.readers import read_documents
+from data.splits import split_documents_three
 
 
 def test_bpe_and_split_are_deterministic() -> None:

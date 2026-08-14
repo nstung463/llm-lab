@@ -1,6 +1,6 @@
 """CLI adapter for TinyStories preparation."""
 
-from ..prepare_tinystories import main
+from prepare_tinystories import main
 
 __all__ = ["main"]
 

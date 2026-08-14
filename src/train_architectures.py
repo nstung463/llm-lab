@@ -1,7 +1,7 @@
 """Train and compare the five educational models in ``learning_assets/model/``.
 
 Example:
-    uv run python -m llm.train_architectures --architecture gqa \
+    uv run python -m train_architectures --architecture gqa \
         --config configs/architecture_tiny.json --text data/sample.txt \
         --output runs/gqa_tiny
 """
@@ -19,15 +19,15 @@ from pathlib import Path
 import torch
 import torch.nn.functional as F
 
-from .config import TrainingConfig
-from .benchmarking.compute import active_parameter_count, estimate_flops, estimate_training_flops
-from .data import load_token_artifacts
-from .data.datasets import make_loaders
-from .data.readers import read_documents
-from .data.splits import split_documents_three
-from .data.tokenizer import build_tokenizer
-from .evaluation.loss import token_weighted_loss
-from .models.registry import (
+from config import TrainingConfig
+from benchmarking.compute import active_parameter_count, estimate_flops, estimate_training_flops
+from data import load_token_artifacts
+from data.datasets import make_loaders
+from data.readers import read_documents
+from data.splits import split_documents_three
+from data.tokenizer import build_tokenizer
+from evaluation.loss import token_weighted_loss
+from models.registry import (
     available_architectures,
     build_model,
     model_metadata,

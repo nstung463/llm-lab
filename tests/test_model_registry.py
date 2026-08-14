@@ -1,8 +1,8 @@
 import torch
 from torch import nn
 
-from llm.architectures import available_architectures as legacy_architectures
-from llm.models import (
+from architectures import available_architectures as legacy_architectures
+from models import (
     available_architectures,
     build_model,
     model_metadata,

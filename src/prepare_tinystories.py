@@ -7,10 +7,10 @@ from pathlib import Path
 
 import numpy as np
 
-from .data.datasets import take_token_budget
-from .data.manifest import build_manifest
-from .data.splits import split_documents_three
-from .data.tokenizer import build_tokenizer
+from data.datasets import take_token_budget
+from data.manifest import build_manifest
+from data.splits import split_documents_three
+from data.tokenizer import build_tokenizer
 from .train import TINYSTORIES_SOURCE
 
 

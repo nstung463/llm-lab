@@ -2,12 +2,12 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from llm.compare_architectures import evaluate as compare_evaluate
-from llm.config import ModelConfig, TrainingConfig
-from llm.data import NextTokenDataset
-from llm.model import GPTModel
-from llm.train_architectures import evaluate as architecture_evaluate
-from llm.training import evaluate, loss_for_batch, train
+from compare_architectures import evaluate as compare_evaluate
+from config import ModelConfig, TrainingConfig
+from data import NextTokenDataset
+from model import GPTModel
+from train_architectures import evaluate as architecture_evaluate
+from training import evaluate, loss_for_batch, train
 
 
 def test_training_uses_uncached_path_and_updates_weights() -> None:

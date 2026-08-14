@@ -16,8 +16,23 @@ data = ["datasets>=3.0"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
+[tool.setuptools]
+py-modules = [
+    "architectures",
+    "benchmark",
+    "benchmark_architectures",
+    "compare_architectures",
+    "config",
+    "evaluate_architectures",
+    "model",
+    "prepare_tinystories",
+    "train",
+    "train_architectures",
+]
+
 [tool.setuptools.packages.find]
 where = ["src"]
+include = ["benchmarking*", "cli*", "data*", "evaluation*", "models*", "training*"]
 
 # Keep PyTorch CPU-only for local verification. Colab provides its own CUDA build.
 [tool.uv.sources]

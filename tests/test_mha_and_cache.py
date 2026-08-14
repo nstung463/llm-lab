@@ -1,7 +1,7 @@
 import torch
 
-from llm.config import ModelConfig
-from llm.model import GPTModel, MultiHeadAttention
+from config import ModelConfig
+from model import GPTModel, MultiHeadAttention
 
 
 def config() -> ModelConfig:

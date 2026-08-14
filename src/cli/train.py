@@ -1,6 +1,6 @@
 """CLI adapter for the baseline trainer."""
 
-from ..train import main
+from train import main
 
 __all__ = ["main"]
 
