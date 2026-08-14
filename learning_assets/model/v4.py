@@ -219,6 +219,11 @@ class CompressedSparseAttention(nn.Module):
 
     def forward(self, x, use_cache=False):
         batch, num_tokens, _ = x.shape
+        if not use_cache:
+            # A non-cached call is a fresh full-sequence computation.
+            self.reset_cache()
+        if self.cache_start_pos + num_tokens > self.rope.cos.size(0):
+            raise ValueError("V4 attention input exceeds context_length; reset or truncate the cache")
         query_positions = torch.arange(
             self.cache_start_pos,
             self.cache_start_pos + num_tokens,
@@ -278,15 +283,23 @@ class CompressedSparseAttention(nn.Module):
         local_keys = torch.cat([local_keys[..., :-self.rope_dim], local_rope], dim=-1)
 
         # Historical compressed KV is selected by the learned Indexer.
-        if self.compressor and self.compressed_kv_cache.size(1):
+        # Exclude blocks whose full-resolution tokens are still local.
+        historical_positions = (
+            self.compressed_positions[0] < local_start
+            if self.compressor and self.compressed_positions is not None
+            else local_positions[:0].bool()
+        )
+        if self.compressor and self.compressed_kv_cache is not None and historical_positions.any():
+            compressed_latent = self.compressed_kv_cache[:, historical_positions]
+            compressed_positions = self.compressed_positions[:, historical_positions]
             compressed_keys = self._split_heads(
-                self.key_up(self.compressed_kv_cache), self.compressed_kv_cache.size(1)
+                self.key_up(compressed_latent), compressed_latent.size(1)
             )
             compressed_values = self._split_heads(
-                self.value_up(self.compressed_kv_cache), self.compressed_kv_cache.size(1)
+                self.value_up(compressed_latent), compressed_latent.size(1)
             )
             compressed_rope = self.rope(
-                compressed_keys[..., -self.rope_dim :], self.compressed_positions[0]
+                compressed_keys[..., -self.rope_dim :], compressed_positions[0]
             )
             compressed_keys = torch.cat(
                 [compressed_keys[..., :-self.rope_dim], compressed_rope], dim=-1
@@ -295,7 +308,7 @@ class CompressedSparseAttention(nn.Module):
                 queries,
                 compressed_keys,
                 query_positions[None].expand(batch, -1),
-                self.compressed_positions,
+                compressed_positions,
             )
         else:
             compressed_keys = local_keys[:, :, :0]
@@ -306,14 +319,12 @@ class CompressedSparseAttention(nn.Module):
 
         keys = torch.cat([local_keys, compressed_keys], dim=2)
         values = torch.cat([local_values, compressed_values], dim=2)
-        key_positions = torch.cat(
-            [local_positions, self.compressed_positions[0] if self.compressor and self.compressed_positions is not None else local_positions[:0]]
-        )
-
         scores = queries @ keys.transpose(-2, -1)
         scores = scores / math.sqrt(self.head_dim)
-        local_allowed = local_positions[None, None, :] <= query_positions[None, :, None]
-        allowed = torch.cat([local_allowed.expand(batch, -1, -1), historical_mask], dim=-1)
+        local_allowed = local_positions[None, :] <= query_positions[:, None]
+        allowed = torch.cat(
+            [local_allowed[None].expand(batch, -1, -1), historical_mask], dim=-1
+        )
         scores = scores.masked_fill(~allowed[:, None], torch.finfo(scores.dtype).min)
         weights = self.dropout(torch.softmax(scores, dim=-1))
         context = weights @ values
@@ -345,6 +356,7 @@ class MoEFeedForward(nn.Module):
         self.shared_expert = SwiGLU(
             self.emb_dim, cfg.get("shared_hidden_dim", self.hidden_dim), dtype
         )
+        self.last_routing_stats = None
 
     def forward(self, x):
         original_shape = x.shape
@@ -359,14 +371,26 @@ class MoEFeedForward(nn.Module):
         topk_weights = topk_weights.to(dtype=x.dtype)
 
         routed = torch.zeros_like(x_flat)
-        for expert_id in torch.unique(topk_indices).tolist():
+        # Iterate over the fixed expert set to avoid a GPU-to-CPU sync from
+        # ``unique(...).tolist()`` on every forward.
+        for expert_id in range(self.num_experts):
             selected = (topk_indices == expert_id).any(dim=-1).nonzero().squeeze(-1)
+            if selected.numel() == 0:
+                continue
             expert_output = self.experts[expert_id](x_flat.index_select(0, selected))
             expert_slots = (topk_indices[selected] == expert_id).int().argmax(dim=-1)
             weights = topk_weights[selected, expert_slots].unsqueeze(-1)
             routed.index_add_(0, selected, expert_output * weights)
 
         shared = self.shared_expert(x_flat)
+        assignment = F.one_hot(
+            topk_indices, num_classes=self.num_experts
+        ).to(dtype=raw_scores.dtype).sum(dim=-2)
+        self.last_routing_stats = {
+            "expert_fraction": (assignment.mean(dim=0) / self.top_k).detach(),
+            "mean_router_probability": F.softmax(raw_scores, dim=-1).mean(dim=0).detach(),
+            "tokens": x_flat.size(0),
+        }
         return (routed + shared).view(original_shape)
 
 
@@ -423,11 +447,21 @@ def generate_text(model, input_ids, max_new_tokens, use_cache=True):
     generated = input_ids.clone()
     if use_cache:
         model.reset_kv_cache()
-        logits = model(generated, use_cache=True)
+        context_length = int(model.cfg["context_length"])
+        cached_tokens = min(generated.shape[1], context_length)
+        logits = model(generated[:, -cached_tokens:], use_cache=True)
         for _ in range(max_new_tokens):
             next_token = logits[:, -1].argmax(dim=-1, keepdim=True)
             generated = torch.cat([generated, next_token], dim=1)
-            logits = model(next_token, use_cache=True)
+            if cached_tokens >= context_length:
+                # Rebuild the cache from the active sliding context once the
+                # absolute context limit is reached.
+                model.reset_kv_cache()
+                logits = model(generated[:, -context_length:], use_cache=True)
+                cached_tokens = context_length
+            else:
+                logits = model(next_token, use_cache=True)
+                cached_tokens += 1
     else:
         for _ in range(max_new_tokens):
             logits = model(generated, use_cache=False)

@@ -26,6 +26,7 @@ py-modules = [
     "evaluate_architectures",
     "model",
     "prepare_tinystories",
+    "rope",
     "train",
     "train_architectures",
 ]

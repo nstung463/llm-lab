@@ -27,9 +27,13 @@ def main():
     device = torch.device(args.device or ("cuda" if torch.cuda.is_available() else "cpu"))
     checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
     tokenizer = tokenizer_from_state(checkpoint["tokenizer"])
-    prompt = torch.tensor([tokenizer.tokenizer.encode(args.prompt).ids], dtype=torch.long, device=device)
+    prompt = torch.tensor([tokenizer.encode(args.prompt)], dtype=torch.long, device=device)
     model = build_model(checkpoint["architecture"], checkpoint["model_config"]).to(device).eval()
-    model.load_state_dict(checkpoint["model_state"])
+    best_model_path = args.checkpoint.parent / "best_model.pt"
+    model.load_state_dict(
+        torch.load(best_model_path, map_location=device, weights_only=True)
+        if best_model_path.exists() else checkpoint["model_state"]
+    )
     flop_estimate = estimate_flops(model, checkpoint["architecture"])
     cache_sequence_length = min(
         prompt.shape[1] + args.new_tokens,

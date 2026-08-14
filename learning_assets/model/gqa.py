@@ -13,13 +13,25 @@ import tiktoken
 import torch
 import torch.nn as nn
 
+from rope import RotaryEmbedding
+
 
 #####################################
 # NEW: GQA instead of MHA
 #####################################
 class GroupedQueryAttention(nn.Module):
     def __init__(
-            self, d_in, d_out, dropout, num_heads, num_kv_groups, dtype=None, qkv_bias=False
+            self,
+            d_in,
+            d_out,
+            dropout,
+            num_heads,
+            num_kv_groups,
+            context_length,
+            rope_dim=None,
+            rope_base=10_000.0,
+            dtype=None,
+            qkv_bias=False,
     ):
         super().__init__()
         assert d_out % num_heads == 0, "d_out must be divisible by num_heads"
@@ -37,6 +49,11 @@ class GroupedQueryAttention(nn.Module):
         self.W_query = nn.Linear(d_in, d_out, bias=qkv_bias, dtype=dtype)
         self.out_proj = nn.Linear(d_out, d_out, bias=False, dtype=dtype)
         self.dropout = nn.Dropout(dropout)
+        rope_dim = self.head_dim if rope_dim is None else int(rope_dim)
+        if rope_dim > self.head_dim:
+            raise ValueError("rope_dim cannot exceed head_dim")
+        self.rope = RotaryEmbedding(rope_dim, context_length, rope_base)
+        self.context_length = context_length
 
         self.register_buffer("cache_k", None, persistent=False)
         self.register_buffer("cache_v", None, persistent=False)
@@ -44,6 +61,9 @@ class GroupedQueryAttention(nn.Module):
 
     def forward(self, x, use_cache=False):
         b, num_tokens, _ = x.shape
+        start_pos = self.ptr_current_pos if use_cache else 0
+        if start_pos + num_tokens > self.context_length:
+            raise ValueError("GQA input exceeds context_length; reset or truncate the cache")
 
         # Apply projections
         queries = self.W_query(x)  # (b, num_tokens, num_heads * head_dim)
@@ -55,6 +75,11 @@ class GroupedQueryAttention(nn.Module):
         keys_new = keys.view(b, num_tokens, self.num_kv_groups, self.head_dim).transpose(1, 2)
         values_new = values.view(b, num_tokens, self.num_kv_groups, self.head_dim).transpose(1, 2)
 
+        positions = torch.arange(
+            start_pos, start_pos + num_tokens, device=x.device, dtype=torch.long
+        )
+        queries, keys_new = self.rope(queries, keys_new, positions)
+
         if use_cache:
             if self.cache_k is None:
                 self.cache_k, self.cache_v = keys_new, values_new
@@ -64,9 +89,8 @@ class GroupedQueryAttention(nn.Module):
             keys_base, values_base = self.cache_k, self.cache_v
         else:
             keys_base, values_base = keys_new, values_new
-            if self.cache_k is not None or self.cache_v is not None:
-                self.cache_k, self.cache_v = None, None
-                self.ptr_current_pos = 0
+            self.cache_k, self.cache_v = None, None
+            self.ptr_current_pos = 0
 
         # Expand keys and values to match the number of heads
         # Shape: (b, num_heads, num_tokens, head_dim)
@@ -89,16 +113,10 @@ class GroupedQueryAttention(nn.Module):
         num_tokens_K = keys.shape[-2]
         device = queries.device
         if use_cache:
-            q_positions = torch.arange(
-                self.ptr_current_pos,
-                self.ptr_current_pos + num_tokens_Q,
-                device=device,
-                dtype=torch.long,
-            )
+            q_positions = positions
             self.ptr_current_pos += num_tokens_Q
         else:
-            q_positions = torch.arange(num_tokens_Q, device=device, dtype=torch.long)
-            self.ptr_current_pos = 0
+            q_positions = positions
         k_positions = torch.arange(num_tokens_K, device=device, dtype=torch.long)
         mask = q_positions.unsqueeze(-1) < k_positions.unsqueeze(0)
 
@@ -200,6 +218,9 @@ class TransformerBlock(nn.Module):
             d_out=cfg["emb_dim"],
             num_heads=cfg["n_heads"],
             num_kv_groups=cfg["n_kv_groups"],
+            context_length=cfg["context_length"],
+            rope_dim=cfg.get("rope_dim"),
+            rope_base=cfg.get("rope_base", 10_000.0),
             dropout=cfg["drop_rate"],
             qkv_bias=cfg["qkv_bias"])
         self.ff = FeedForward(cfg)
@@ -234,8 +255,8 @@ class TransformerBlock(nn.Module):
 class GPTModel(nn.Module):
     def __init__(self, cfg):
         super().__init__()
+        self.cfg = cfg
         self.tok_emb = nn.Embedding(cfg["vocab_size"], cfg["emb_dim"])
-        self.pos_emb = nn.Embedding(cfg["context_length"], cfg["emb_dim"])
         self.drop_emb = nn.Dropout(cfg["drop_rate"])
 
         # self.trf_blocks = nn.Sequential(
@@ -255,20 +276,15 @@ class GPTModel(nn.Module):
         batch_size, seq_len = in_idx.shape
         tok_embeds = self.tok_emb(in_idx)
 
-        # pos_embeds = self.pos_emb(torch.arange(seq_len, device=in_idx.device))
-
         ####################################################
         #  KV cache-related
         if use_cache:
-            pos_ids = torch.arange(self.current_pos, self.current_pos + seq_len, device=in_idx.device, dtype=torch.long)
             self.current_pos += seq_len
         else:
             self.current_pos = 0
-            pos_ids = torch.arange(0, seq_len, device=in_idx.device, dtype=torch.long)
-        pos_embeds = self.pos_emb(pos_ids).unsqueeze(0)
         ####################################################
 
-        x = tok_embeds + pos_embeds  # Shape [batch_size, num_tokens, emb_size]
+        x = tok_embeds
         x = self.drop_emb(x)
 
         # x = self.trf_blocks(x)
@@ -294,21 +310,28 @@ class GPTModel(nn.Module):
 def generate_text_simple_cached(model, idx, max_new_tokens,
                                 context_size=None, use_cache=True):
     model.eval()
-    ctx_len = context_size or model.pos_emb.num_embeddings
+    ctx_len = context_size or model.cfg["context_length"]
 
     with torch.no_grad():
         if use_cache:
-            # Init cache with full prompt
+            # Cache only the active context window.
             model.reset_kv_cache()
-            logits = model(idx[:, -ctx_len:], use_cache=True)
+            cached_tokens = min(idx.shape[1], ctx_len)
+            logits = model(idx[:, -cached_tokens:], use_cache=True)
 
             for _ in range(max_new_tokens):
                 # a) pick the token with the highest log-probability (greedy sampling)
                 next_idx = logits[:, -1].argmax(dim=-1, keepdim=True)
                 # b) append it to the running sequence
                 idx = torch.cat([idx, next_idx], dim=1)
-                # c) feed model only the new token
-                logits = model(next_idx, use_cache=True)
+                if cached_tokens >= ctx_len:
+                    # Rebuild after the cache reaches the RoPE/context limit.
+                    model.reset_kv_cache()
+                    logits = model(idx[:, -ctx_len:], use_cache=True)
+                    cached_tokens = ctx_len
+                else:
+                    logits = model(next_idx, use_cache=True)
+                    cached_tokens += 1
         else:
             for _ in range(max_new_tokens):
                 logits = model(idx[:, -ctx_len:], use_cache=False)

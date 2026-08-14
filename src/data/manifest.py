@@ -31,6 +31,10 @@ class DatasetManifest:
     target_validation_tokens: int | None = None
     target_test_tokens: int | None = None
     token_id_dtype: str | None = None
+    train_token_sha256: str | None = None
+    validation_token_sha256: str | None = None
+    test_token_sha256: str | None = None
+    validation_fraction: float | None = None
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -64,6 +68,10 @@ def build_manifest(
     target_validation_tokens: int | None = None,
     target_test_tokens: int | None = None,
     token_id_dtype: str | None = None,
+    train_token_sha256: str | None = None,
+    validation_token_sha256: str | None = None,
+    test_token_sha256: str | None = None,
+    validation_fraction: float | None = None,
 ) -> DatasetManifest:
     """Build a manifest from raw documents and their deterministic partitions."""
     required_source_fields = ("id", "url", "license", "license_url")
@@ -92,4 +100,8 @@ def build_manifest(
         target_validation_tokens=target_validation_tokens,
         target_test_tokens=target_test_tokens,
         token_id_dtype=token_id_dtype,
+        train_token_sha256=train_token_sha256,
+        validation_token_sha256=validation_token_sha256,
+        test_token_sha256=test_token_sha256,
+        validation_fraction=validation_fraction,
     )

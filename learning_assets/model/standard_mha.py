@@ -12,6 +12,8 @@ import math
 import torch
 from torch import Tensor, nn
 
+from rope import RotaryEmbedding
+
 
 class LayerNorm(nn.Module):
     def __init__(self, emb_dim: int, eps: float = 1e-5) -> None:
@@ -41,6 +43,17 @@ class MultiHeadAttention(nn.Module):
         self.v_proj = nn.Linear(emb_dim, emb_dim, bias=bias, dtype=dtype)
         self.out_proj = nn.Linear(emb_dim, emb_dim, bias=False, dtype=dtype)
         self.dropout = nn.Dropout(cfg.get("drop_rate", 0.0))
+        rope_dim = cfg.get("rope_dim", self.head_dim)
+        if rope_dim is None:
+            rope_dim = self.head_dim
+        if rope_dim > self.head_dim:
+            raise ValueError("rope_dim cannot exceed head_dim")
+        self.rope = RotaryEmbedding(
+            rope_dim=int(rope_dim),
+            max_seq_len=cfg["context_length"],
+            base=float(cfg.get("rope_base", 10_000.0)),
+        )
+        self.context_length = int(cfg["context_length"])
         self.register_buffer("cache_k", None, persistent=False)
         self.register_buffer("cache_v", None, persistent=False)
         self.current_pos = 0
@@ -54,9 +67,13 @@ class MultiHeadAttention(nn.Module):
         queries = self._split(self.q_proj(x))
         keys = self._split(self.k_proj(x))
         values = self._split(self.v_proj(x))
+        start = self.current_pos if use_cache else 0
+        if start + tokens > self.context_length:
+            raise ValueError("MHA input exceeds context_length; reset or truncate the cache")
+        positions = torch.arange(start, start + tokens, device=x.device)
+        queries, keys = self.rope(queries, keys, positions)
 
         if use_cache:
-            start = self.current_pos
             if self.cache_k is not None:
                 keys = torch.cat((self.cache_k, keys), dim=2)
                 values = torch.cat((self.cache_v, values), dim=2)
@@ -123,34 +140,23 @@ class GPTModel(nn.Module):
         dtype = cfg.get("dtype")
         self.cfg = cfg
         self.tok_emb = nn.Embedding(cfg["vocab_size"], cfg["emb_dim"], dtype=dtype)
-        self.pos_emb = nn.Embedding(cfg["context_length"], cfg["emb_dim"], dtype=dtype)
         self.drop_emb = nn.Dropout(cfg.get("drop_rate", 0.0))
         self.blocks = nn.ModuleList(
             [TransformerBlock(cfg) for _ in range(cfg["n_layers"])]
         )
         self.final_norm = LayerNorm(cfg["emb_dim"])
         self.out_head = nn.Linear(cfg["emb_dim"], cfg["vocab_size"], bias=False, dtype=dtype)
-        self.current_pos = 0
 
     def forward(self, input_ids: Tensor, use_cache: bool = False) -> Tensor:
         _, tokens = input_ids.shape
-        if use_cache:
-            positions = torch.arange(
-                self.current_pos, self.current_pos + tokens, device=input_ids.device
-            )
-            self.current_pos += tokens
-        else:
+        if not use_cache:
             self.reset_kv_cache()
-            positions = torch.arange(tokens, device=input_ids.device)
-        if positions[-1] >= self.pos_emb.num_embeddings:
-            raise ValueError("input exceeds context_length")
-        x = self.tok_emb(input_ids) + self.pos_emb(positions).unsqueeze(0)
+        x = self.tok_emb(input_ids)
         x = self.drop_emb(x)
         for block in self.blocks:
             x = block(x, use_cache=use_cache)
         return self.out_head(self.final_norm(x))
 
     def reset_kv_cache(self) -> None:
-        self.current_pos = 0
         for block in self.blocks:
             block.reset_cache()

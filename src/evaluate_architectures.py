@@ -12,7 +12,7 @@ import torch
 from data import load_token_artifacts
 from data.datasets import make_loaders
 from data.readers import read_documents
-from data.splits import split_documents_three
+from data.splits import deduplicate_documents, split_documents_three
 from data.tokenizer import tokenizer_from_state
 from evaluation.loss import evaluate_loss_stats
 from models.registry import build_model
@@ -39,7 +39,7 @@ def main() -> None:
     else:
         if args.text is None:
             raise ValueError("Provide --text or --artifact-manifest")
-        documents = read_documents(args.text)
+        documents = deduplicate_documents(read_documents(args.text))
         train_documents, validation_documents, _ = split_documents_three(
             documents,
             float(checkpoint.get("train_fraction", 0.8)),
@@ -51,7 +51,11 @@ def main() -> None:
     model_cfg = checkpoint["model_config"]
     _, loader = make_loaders(tokens, tokens, model_cfg["context_length"], checkpoint["training_config"]["batch_size"], seed)
     model = build_model(checkpoint["architecture"], model_cfg).to(device)
-    model.load_state_dict(checkpoint["model_state"])
+    best_model_path = args.checkpoint.parent / "best_model.pt"
+    model.load_state_dict(
+        torch.load(best_model_path, map_location=device, weights_only=True)
+        if best_model_path.exists() else checkpoint["model_state"]
+    )
     stats = evaluate_loss_stats(model, loader, device, args.eval_batches)
     loss = float(stats["loss"])
     print(json.dumps({"architecture": checkpoint["architecture"], "validation_loss": loss, "perplexity": math.exp(min(loss, 20.0)), "batches": stats["batches"], "tokens": stats["tokens"], "device": str(device)}, indent=2))

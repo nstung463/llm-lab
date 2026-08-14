@@ -5,6 +5,8 @@
     "emb_dim": 128,
     "n_heads": 4,
     "n_layers": 4,
+    "rope_dim": 32,
+    "rope_base": 10000.0,
     "dropout": 0.1,
     "qkv_bias": false
   },
