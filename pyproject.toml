@@ -7,7 +7,7 @@ name = "llm"
 version = "0.1.0"
 description = "Educational GPT MHA baseline with inference KV cache"
 requires-python = ">=3.10"
-dependencies = ["numpy>=1.26", "tiktoken>=0.7", "tokenizers>=0.20", "torch>=2.2"]
+dependencies = ["numpy>=1.26", "tiktoken>=0.7", "tokenizers>=0.20", "torch>=2.2", "tqdm>=4.66"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]

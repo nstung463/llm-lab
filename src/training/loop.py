@@ -3,22 +3,55 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 import inspect
 from pathlib import Path
 import random
+import time
 from typing import Any
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import Tensor
+from tqdm.auto import tqdm
 
 from config import TrainingConfig
 from evaluation.loss import token_weighted_loss
 from models.baseline import GPTModel
 from training.optim import build_adamw
 from training.schedule import cosine_lr, set_optimizer_lr
+
+
+@dataclass
+class TrainingState:
+    """Minimal OLMo-style state shared by the loop and checkpoints.
+
+    ``global_step`` counts optimizer updates; ``tokens_seen`` is the primary
+    data-progress counter. ``epoch`` is a one-based loader/reporting value.
+    """
+
+    global_step: int = 0
+    tokens_seen: int = 0
+    epoch: int = 1
+    tokens_per_epoch: int | None = None
+
+    @property
+    def fractional_epoch(self) -> float | None:
+        if not self.tokens_per_epoch:
+            return None
+        return self.tokens_seen / self.tokens_per_epoch
+
+    def state_dict(self) -> dict[str, int | float | None]:
+        return {
+            "global_step": self.global_step,
+            "step": self.global_step,
+            "tokens_seen": self.tokens_seen,
+            "global_train_tokens_seen": self.tokens_seen,
+            "epoch": self.epoch,
+            "tokens_per_epoch": self.tokens_per_epoch,
+            "fractional_epoch": self.fractional_epoch,
+        }
 
 
 def loss_for_batch(model: GPTModel, inputs: Tensor, targets: Tensor) -> Tensor:
@@ -47,16 +80,17 @@ def train(
     optimizer: torch.optim.Optimizer | None = None,
     start_step: int = 0,
     history: list[dict[str, float]] | None = None,
-    checkpoint_callback: Callable[[int, torch.optim.Optimizer, list[dict[str, float]], int], None] | None = None,
+    checkpoint_callback: Callable[..., None] | None = None,
     scaler: Any | None = None,
     tokens_seen: int = 0,
+    state: TrainingState | None = None,
 ) -> list[dict[str, float]]:
     model.to(device)
     optimizer = optimizer or build_adamw(model, cfg)
-    for state in optimizer.state.values():
-        for key, value in state.items():
+    for optimizer_state in optimizer.state.values():
+        for key, value in optimizer_state.items():
             if isinstance(value, Tensor):
-                state[key] = value.to(device)
+                optimizer_state[key] = value.to(device)
     use_amp = device.type == "cuda" and cfg.precision != "fp32"
     if cfg.precision == "bf16":
         amp_dtype = torch.bfloat16
@@ -69,9 +103,28 @@ def train(
     use_scaler = use_amp and amp_dtype == torch.float16
     scaler = scaler or torch.amp.GradScaler("cuda", enabled=use_scaler)
     history = history or []
+    state = state or TrainingState(
+        global_step=start_step,
+        tokens_seen=tokens_seen,
+        epoch=int(getattr(train_loader, "epoch", 1)),
+        tokens_per_epoch=getattr(train_loader, "tokens_per_epoch", None),
+    )
+    start_step = state.global_step
+    tokens_seen = state.tokens_seen
     iterator = iter(train_loader)
     model.train()
-    for step in range(start_step + 1, cfg.max_steps + 1):
+    last_val_loss = float(history[-1]["val_loss"]) if history else None
+    start_time = time.perf_counter()
+    if device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats(device)
+    progress = tqdm(
+        range(start_step + 1, cfg.max_steps + 1),
+        total=max(0, cfg.max_steps - start_step),
+        desc="Training",
+        unit="step",
+        dynamic_ncols=True,
+    )
+    for step in progress:
         learning_rate = cosine_lr(
             step,
             warmup_steps=cfg.warmup_steps,
@@ -85,6 +138,8 @@ def train(
             try:
                 microbatches.append(next(iterator))
             except StopIteration:
+                if not hasattr(train_loader, "epoch"):
+                    state.epoch += 1
                 iterator = iter(train_loader)
                 microbatches.append(next(iterator))
         total_tokens = sum(targets.numel() for _, targets in microbatches)
@@ -118,9 +173,13 @@ def train(
         else:
             optimizer.step()
         tokens_seen += total_tokens
+        state.global_step = step
+        state.tokens_seen = tokens_seen
+        state.epoch = int(getattr(train_loader, "epoch", state.epoch))
         if step == 1 or step % cfg.eval_every == 0 or step == cfg.max_steps:
             train_loss = evaluate(model, train_loader, device, cfg.eval_batches)
             val_loss = evaluate(model, val_loader, device, cfg.eval_batches)
+            last_val_loss = float(val_loss)
             history.append({
                 "step": float(step),
                 "train_loss": train_loss,
@@ -129,17 +188,45 @@ def train(
                 "micro_train_loss": loss_sum / total_tokens,
                 "grad_norm": float(grad_norm),
                 "tokens_seen": float(tokens_seen),
+                "global_step": float(step),
+                "epoch": float(state.epoch),
+                "fractional_epoch": (
+                    float(state.fractional_epoch)
+                    if state.fractional_epoch is not None
+                    else float("nan")
+                ),
             })
             model.train()
+        elapsed = max(time.perf_counter() - start_time, 1e-9)
+        postfix = {
+            "loss": f"{loss_sum / total_tokens:.4f}",
+            "lr": f"{learning_rate:.2e}",
+            "grad": f"{float(grad_norm):.2f}",
+            "tok/s": f"{tokens_seen / elapsed:.0f}",
+            "epoch": (
+                f"{state.fractional_epoch:.2f}"
+                if state.fractional_epoch is not None
+                else str(state.epoch)
+            ),
+        }
+        if last_val_loss is not None:
+            postfix["val"] = f"{last_val_loss:.4f}"
+        if device.type == "cuda":
+            peak_vram = torch.cuda.max_memory_allocated(device) / (1024 ** 3)
+            postfix["vram"] = f"{peak_vram:.1f}G"
+        progress.set_postfix(postfix)
         if step % cfg.save_every == 0 or step == cfg.max_steps:
             if checkpoint_callback is not None:
                 # Keep compatibility with older user callbacks that predate
                 # the token-budget argument.
                 parameter_count = len(inspect.signature(checkpoint_callback).parameters)
-                if parameter_count >= 4:
+                if parameter_count >= 5:
+                    checkpoint_callback(step, optimizer, history, tokens_seen, state.state_dict())
+                elif parameter_count >= 4:
                     checkpoint_callback(step, optimizer, history, tokens_seen)
                 else:
                     checkpoint_callback(step, optimizer, history)  # type: ignore[misc]
+    progress.close()
     return history
 
 
@@ -156,6 +243,7 @@ def save_checkpoint(
     scaler: Any | None = None,
     tokens_seen: int = 0,
     test_loss: float | None = None,
+    epoch: int | None = None,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
@@ -167,7 +255,10 @@ def save_checkpoint(
             "tokenizer": tokenizer_state,
             "history": history,
             "step": step,
+            "global_step": step,
             "tokens_seen": tokens_seen,
+            "global_train_tokens_seen": tokens_seen,
+            "epoch": epoch,
             "test_loss": test_loss,
             "data_manifest": data_manifest,
             "loader_state": loader_state,

@@ -20,6 +20,7 @@ from pathlib import Path
 import torch
 import torch.nn.functional as F
 import numpy as np
+from tqdm.auto import tqdm
 
 from config import TrainingConfig, validate_resume_config
 from benchmarking.compute import active_parameter_count, estimate_flops, estimate_training_flops
@@ -199,10 +200,10 @@ def main() -> None:
     if checkpoint is not None:
         model.load_state_dict(checkpoint["model_state"])
         optimizer.load_state_dict(checkpoint["optimizer_state"])
-        start_step = int(checkpoint["step"])
+        start_step = int(checkpoint.get("global_step", checkpoint["step"]))
         validate_resume_config(checkpoint["training_config"], training_cfg, start_step)
         history = list(checkpoint.get("history", []))
-        tokens_seen = int(checkpoint.get("tokens_seen", 0))
+        tokens_seen = int(checkpoint.get("global_train_tokens_seen", checkpoint.get("tokens_seen", 0)))
     use_amp = device.type == "cuda" and training_cfg.precision != "fp32"
     if training_cfg.precision == "bf16":
         amp_dtype = torch.bfloat16
@@ -222,6 +223,7 @@ def main() -> None:
         val_loader.load_state_dict(checkpoint["loader_state"]["validation"])
         test_loader.load_state_dict(checkpoint["loader_state"]["test"])
         restore_rng_state(checkpoint.get("rng_state", checkpoint))
+    tokens_per_epoch = train_loader.tokens_per_epoch
     train_iterator = iter(train_loader)
     best_validation_loss = min(
         (float(row["validation_loss"]) for row in history),
@@ -239,7 +241,12 @@ def main() -> None:
             "model_config": model_cfg,
             "training_config": asdict(training_cfg),
             "step": step,
+            "global_step": step,
             "tokens_seen": tokens_seen,
+            "global_train_tokens_seen": tokens_seen,
+            "epoch": train_loader.epoch,
+            "tokens_per_epoch": tokens_per_epoch,
+            "fractional_epoch": tokens_seen / tokens_per_epoch,
             "model_state": model.state_dict(),
             "optimizer_state": optimizer.state_dict(),
             "scaler_state": scaler.state_dict() if use_scaler else None,
@@ -274,7 +281,17 @@ def main() -> None:
             "device": str(device),
         }
 
-    for step in range(start_step + 1, training_cfg.max_steps + 1):
+    last_validation_loss = None
+    if device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats(device)
+    progress = tqdm(
+        range(start_step + 1, training_cfg.max_steps + 1),
+        total=max(0, training_cfg.max_steps - start_step),
+        desc=f"Train {args.architecture}",
+        unit="step",
+        dynamic_ncols=True,
+    )
+    for step in progress:
         model.train()
         learning_rate = cosine_lr(
             step,
@@ -324,12 +341,16 @@ def main() -> None:
         if step == 1 or step % training_cfg.eval_every == 0 or step == training_cfg.max_steps:
             train_loss = evaluate(model, train_loader, device, training_cfg.eval_batches)
             validation_loss = evaluate(model, val_loader, device, training_cfg.eval_batches)
+            last_validation_loss = float(validation_loss)
             record = {
                 "step": step,
+                "global_step": step,
                 "train_loss": train_loss,
                 "validation_loss": validation_loss,
                 "validation_perplexity": math.exp(min(validation_loss, 20.0)),
                 "tokens_seen": tokens_seen,
+                "epoch": train_loader.epoch,
+                "fractional_epoch": tokens_seen / tokens_per_epoch,
                 "estimated_training_flops": estimate_training_flops(
                     model, args.architecture, tokens_seen
                 ),
@@ -340,16 +361,34 @@ def main() -> None:
                 "elapsed_seconds": time.perf_counter() - start_time,
             }
             history.append(record)
-            print(json.dumps(record))
             if validation_loss < best_validation_loss:
                 best_validation_loss = validation_loss
                 best_model_step = step
                 torch.save(model.state_dict(), args.output / "best_model.pt")
-            print(json.dumps({"sample": sample_text(model, tokenizer, device, train_tokens[:context_length])}))
+            progress.write(json.dumps({
+                "step": step,
+                "sample": sample_text(model, tokenizer, device, train_tokens[:context_length]),
+            }, ensure_ascii=True))
+
+        elapsed = max(time.perf_counter() - start_time, 1e-9)
+        postfix = {
+            "loss": f"{step_loss / total_tokens:.4f}",
+            "lr": f"{learning_rate:.2e}",
+            "grad": f"{float(grad_norm):.2f}",
+            "tok/s": f"{tokens_seen / elapsed:.0f}",
+            "epoch": f"{tokens_seen / tokens_per_epoch:.2f}",
+        }
+        if last_validation_loss is not None:
+            postfix["val"] = f"{last_validation_loss:.4f}"
+        if device.type == "cuda":
+            peak_vram = torch.cuda.max_memory_allocated(device) / (1024 ** 3)
+            postfix["vram"] = f"{peak_vram:.1f}G"
+        progress.set_postfix(postfix)
 
         if step % training_cfg.save_every == 0 or step == training_cfg.max_steps:
             torch.save(checkpoint_payload(step), args.output / "checkpoint.pt")
 
+    progress.close()
     # Report test quality for the checkpoint selected by validation, while
     # keeping the resumable checkpoint on the final training state.
     final_state = {name: value.detach().clone() for name, value in model.state_dict().items()}

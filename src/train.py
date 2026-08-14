@@ -150,6 +150,7 @@ def main() -> None:
         current_optimizer: torch.optim.Optimizer,
         current_history: list[dict[str, float]],
         current_tokens_seen: int,
+        current_state: dict[str, object],
     ) -> None:
         save_checkpoint(
             args.output / "checkpoint.pt",
@@ -167,6 +168,7 @@ def main() -> None:
             },
             scaler=scaler,
             tokens_seen=current_tokens_seen,
+            epoch=int(current_state["epoch"]),
         )
 
     history = train(
@@ -193,6 +195,7 @@ def main() -> None:
             "test": test_loader.state_dict(),
         },
         scaler=scaler, tokens_seen=tokens_seen, test_loss=test_loss,
+        epoch=train_loader.epoch,
     )
     tokenizer.save(args.output / "tokenizer.json")
     (args.output / "metrics.json").write_text(json.dumps(history, indent=2), encoding="utf-8")

@@ -97,6 +97,10 @@ def test_jsonl_to_next_token_batch(tmp_path: Path) -> None:
 def test_batch_loader_resume_keeps_order_and_cursor() -> None:
     dataset = NextTokenDataset(list(range(100)), context_length=8, stride=8)
     loader = StatefulBatchLoader(dataset, batch_size=3, shuffle=True, seed=11)
+    assert loader.epoch == 1
+    assert loader.tokens_per_epoch == len(dataset) * dataset.context_length
+    drop_last_loader = StatefulBatchLoader(dataset, batch_size=3, shuffle=False, seed=11, drop_last=True)
+    assert drop_last_loader.tokens_per_epoch == (len(dataset) // 3) * 3 * dataset.context_length
     next(iter(loader))
     state = loader.state_dict()
 
@@ -107,6 +111,16 @@ def test_batch_loader_resume_keeps_order_and_cursor() -> None:
 
     torch.testing.assert_close(expected[0], actual[0])
     torch.testing.assert_close(expected[1], actual[1])
+
+
+def test_batch_loader_advances_one_based_epoch_after_full_pass() -> None:
+    dataset = NextTokenDataset(list(range(100)), context_length=8, stride=8)
+    loader = StatefulBatchLoader(dataset, batch_size=3, shuffle=False, seed=11)
+
+    list(loader)
+
+    assert loader.epoch == 2
+    assert loader.batch_index == 0
 
 
 def test_fixed_token_artifact_loader_validates_manifest_contract(tmp_path: Path) -> None:
