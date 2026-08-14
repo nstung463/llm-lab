@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .tokenizer import ByteLevelBPE
+from .tokenizer import ByteLevelBPE, TiktokenTokenizer
 
 
 def _sha256_file(path: Path) -> str:
@@ -21,11 +21,13 @@ def _sha256_file(path: Path) -> str:
 
 
 def _resolve_artifact_path(manifest_path: Path, value: str) -> Path:
-    candidate = Path(value)
+    # Manifests may be created on Windows and consumed on Colab/Linux.
+    candidate = Path(value.replace("\\", "/"))
     if candidate.is_absolute() and candidate.exists():
         return candidate
-    candidates = [manifest_path.parent / candidate, Path.cwd() / candidate]
-    for path in candidates:
+    bases = [manifest_path.parent, *manifest_path.parent.parents, Path.cwd()]
+    for base in bases:
+        path = base / candidate
         if path.exists():
             return path.resolve()
     raise FileNotFoundError(f"Artifact path does not exist: {value}")
@@ -44,7 +46,7 @@ class TokenArtifacts:
 
     manifest_path: Path
     manifest: dict[str, object]
-    tokenizer: ByteLevelBPE
+    tokenizer: ByteLevelBPE | TiktokenTokenizer
     train_tokens: np.ndarray
     validation_tokens: np.ndarray
     test_tokens: np.ndarray
@@ -89,19 +91,39 @@ def load_token_artifacts(manifest_path: Path) -> TokenArtifacts:
         if len(array) == 0:
             raise ValueError(f"{name} token artifact is empty")
 
-    tokenizer = ByteLevelBPE.from_state(
-        {"tokenizer_json": tokenizer_path.read_text(encoding="utf-8")}
-    )
+    tokenizer_kind = str(manifest.get("tokenizer_kind", "byte_level_bpe"))
+    if tokenizer_kind == "tiktoken":
+        tokenizer = TiktokenTokenizer.from_state(
+            json.loads(tokenizer_path.read_text(encoding="utf-8"))
+        )
+    else:
+        tokenizer = ByteLevelBPE.from_state(
+            {"tokenizer_json": tokenizer_path.read_text(encoding="utf-8")}
+        )
     for name, array in arrays.items():
         if int(array.min()) < 0 or int(array.max()) >= tokenizer.vocab_size:
             raise ValueError(f"{name} token artifact contains an ID outside tokenizer vocabulary")
 
+    expected_hashes = {
+        "train": manifest.get("train_token_sha256"),
+        "validation": manifest.get("validation_token_sha256"),
+        "test": manifest.get("test_token_sha256"),
+    }
+    actual_hashes = {
+        "train": _hash_token_array(arrays["train"]),
+        "validation": _hash_token_array(arrays["validation"]),
+        "test": _hash_token_array(arrays["test"]),
+    }
+    for name, expected_hash in expected_hashes.items():
+        if expected_hash and expected_hash != actual_hashes[name]:
+            raise ValueError(f"{name} token artifact hash does not match manifest")
+
     contract = {
         "manifest_sha256": _sha256_file(manifest_path),
         "tokenizer_sha256": _sha256_file(tokenizer_path),
-        "train_token_sha256": _hash_token_array(arrays["train"]),
-        "validation_token_sha256": _hash_token_array(arrays["validation"]),
-        "test_token_sha256": _hash_token_array(arrays["test"]),
+        "train_token_sha256": actual_hashes["train"],
+        "validation_token_sha256": actual_hashes["validation"],
+        "test_token_sha256": actual_hashes["test"],
         "train_token_count": len(arrays["train"]),
         "validation_token_count": len(arrays["validation"]),
         "test_token_count": len(arrays["test"]),

@@ -13,6 +13,8 @@ import tiktoken
 import torch
 import torch.nn as nn
 
+from rope import RotaryEmbedding
+
 MOE_FF_TIME_MS = []
 MOE_FF_MEM_BYTES = []
 #####################################
@@ -127,7 +129,19 @@ class GroupedQueryAttention(nn.Module):
 class MultiHeadLatentAttention(nn.Module):
     """MLA: cache compressed KV latents instead of full K/V tensors."""
 
-    def __init__(self, d_in, d_out, dropout, num_heads, latent_dim, dtype=None, qkv_bias=False):
+    def __init__(
+        self,
+        d_in,
+        d_out,
+        dropout,
+        num_heads,
+        latent_dim,
+        context_length,
+        rope_dim=None,
+        rope_base=10_000.0,
+        dtype=None,
+        qkv_bias=False,
+    ):
         super().__init__()
         assert d_out % num_heads == 0, "d_out must be divisible by num_heads"
         assert latent_dim > 0, "latent_dim must be positive"
@@ -140,6 +154,11 @@ class MultiHeadLatentAttention(nn.Module):
         self.W_UV = nn.Linear(latent_dim, d_out, bias=qkv_bias, dtype=dtype)
         self.out_proj = nn.Linear(d_out, d_out, bias=False, dtype=dtype)
         self.dropout = nn.Dropout(dropout)
+        rope_dim = self.head_dim if rope_dim is None else int(rope_dim)
+        if rope_dim > self.head_dim:
+            raise ValueError("rope_dim cannot exceed head_dim")
+        self.rope = RotaryEmbedding(rope_dim, context_length, rope_base)
+        self.context_length = context_length
 
         # Only latent_new is stored in the KV cache.
         self.register_buffer("cache_latent", None, persistent=False)
@@ -147,6 +166,9 @@ class MultiHeadLatentAttention(nn.Module):
 
     def forward(self, x, use_cache=False):
         batch, num_tokens, _ = x.shape
+        start_pos = self.ptr_current_pos if use_cache else 0
+        if start_pos + num_tokens > self.context_length:
+            raise ValueError("MLA input exceeds context_length; reset or truncate the cache")
         queries = self.W_query(x)
         latent_new = self.W_DKV(x)  # x -> compressed KV representation.
 
@@ -165,14 +187,16 @@ class MultiHeadLatentAttention(nn.Module):
         values = self.W_UV(latent_total).view(batch, -1, self.num_heads, self.head_dim).transpose(1, 2)
         queries = queries.view(batch, num_tokens, self.num_heads, self.head_dim).transpose(1, 2)
 
-        attn_scores = queries @ keys.transpose(2, 3)
         num_tokens_k = keys.shape[-2]
         if use_cache:
-            q_positions = torch.arange(self.ptr_current_pos, self.ptr_current_pos + num_tokens, device=x.device)
+            q_positions = torch.arange(start_pos, start_pos + num_tokens, device=x.device)
             self.ptr_current_pos += num_tokens
         else:
             q_positions = torch.arange(num_tokens, device=x.device)
         k_positions = torch.arange(num_tokens_k, device=x.device)
+        queries, keys = self.rope(queries, keys, q_positions, k_positions)
+
+        attn_scores = queries @ keys.transpose(2, 3)
         causal_mask = q_positions[:, None] < k_positions[None, :]
         attn_scores = attn_scores.masked_fill(causal_mask, -torch.inf)
 
@@ -448,6 +472,9 @@ class TransformerBlock(nn.Module):
             d_out=cfg["emb_dim"],
             num_heads=cfg["n_heads"],
             latent_dim=cfg["latent_dim"],
+            context_length=cfg["context_length"],
+            rope_dim=cfg.get("rope_dim"),
+            rope_base=cfg.get("rope_base", 10_000.0),
             dropout=cfg["drop_rate"],
             qkv_bias=cfg["qkv_bias"],
             dtype=cfg.get("dtype"),
@@ -495,8 +522,8 @@ class TransformerBlock(nn.Module):
 class GPTModel(nn.Module):
     def __init__(self, cfg):
         super().__init__()
+        self.cfg = cfg
         self.tok_emb = nn.Embedding(cfg["vocab_size"], cfg["emb_dim"])
-        self.pos_emb = nn.Embedding(cfg["context_length"], cfg["emb_dim"])
         self.drop_emb = nn.Dropout(cfg["drop_rate"])
 
         # self.trf_blocks = nn.Sequential(
@@ -516,20 +543,15 @@ class GPTModel(nn.Module):
         batch_size, seq_len = in_idx.shape
         tok_embeds = self.tok_emb(in_idx)
 
-        # pos_embeds = self.pos_emb(torch.arange(seq_len, device=in_idx.device))
-
         ####################################################
         #  KV cache-related
         if use_cache:
-            pos_ids = torch.arange(self.current_pos, self.current_pos + seq_len, device=in_idx.device, dtype=torch.long)
             self.current_pos += seq_len
         else:
             self.current_pos = 0
-            pos_ids = torch.arange(0, seq_len, device=in_idx.device, dtype=torch.long)
-        pos_embeds = self.pos_emb(pos_ids).unsqueeze(0)
         ####################################################
 
-        x = tok_embeds + pos_embeds  # Shape [batch_size, num_tokens, emb_size]
+        x = tok_embeds
         x = self.drop_emb(x)
 
         # x = self.trf_blocks(x)
@@ -555,7 +577,7 @@ class GPTModel(nn.Module):
 def generate_text_simple_cached(model, idx, max_new_tokens,
                                 context_size=None, use_cache=True):
     model.eval()
-    ctx_len = context_size or model.pos_emb.num_embeddings
+    ctx_len = context_size or model.cfg["context_length"]
     batch_size, base_len = idx.shape
     total_len = base_len + max_new_tokens
     generated = torch.empty(
@@ -569,10 +591,11 @@ def generate_text_simple_cached(model, idx, max_new_tokens,
 
     with torch.no_grad():
         if use_cache:
-            # Init cache with full prompt
+            # Cache only the active context window.
             model.reset_kv_cache()
             prompt_start = max(0, cur_len - ctx_len)
             logits = model(generated[:, prompt_start:cur_len], use_cache=True)
+            cached_tokens = min(cur_len, ctx_len)
 
             if use_cuda:
                 torch.cuda.synchronize()
@@ -583,8 +606,14 @@ def generate_text_simple_cached(model, idx, max_new_tokens,
                 # b) append it to the running sequence (in-place)
                 generated[:, cur_len] = next_idx
                 cur_len += 1
-                # c) feed model only the new token
-                logits = model(generated[:, cur_len - 1 : cur_len], use_cache=True)
+                if cached_tokens >= ctx_len:
+                    # Rebuild after the cache reaches the RoPE/context limit.
+                    model.reset_kv_cache()
+                    logits = model(generated[:, cur_len - ctx_len : cur_len], use_cache=True)
+                    cached_tokens = ctx_len
+                else:
+                    logits = model(generated[:, cur_len - 1 : cur_len], use_cache=True)
+                    cached_tokens += 1
 
                 if use_cuda:
                     torch.cuda.synchronize()

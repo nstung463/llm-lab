@@ -5,6 +5,17 @@ from __future__ import annotations
 import random
 
 
+def deduplicate_documents(documents: list[str]) -> list[str]:
+    """Remove exact duplicate documents while preserving first-seen order."""
+    unique: list[str] = []
+    seen: set[str] = set()
+    for document in documents:
+        if document not in seen:
+            seen.add(document)
+            unique.append(document)
+    return unique
+
+
 def _validate_fraction(name: str, value: float) -> None:
     if not 0.0 < value < 1.0:
         raise ValueError(f"{name} must be between 0 and 1")
@@ -14,6 +25,7 @@ def split_documents(
     documents: list[str], train_fraction: float, seed: int
 ) -> tuple[list[str], list[str]]:
     """Split documents into deterministic train and validation partitions."""
+    documents = deduplicate_documents(documents)
     _validate_fraction("train_fraction", train_fraction)
     if len(documents) < 2:
         raise ValueError("At least two documents are required for a train/validation split")
@@ -43,6 +55,7 @@ def split_documents_three(
     documents: list[str], train_fraction: float, validation_fraction: float, seed: int
 ) -> tuple[list[str], list[str], list[str]]:
     """Split documents into deterministic train, validation and test partitions."""
+    documents = deduplicate_documents(documents)
     _validate_fraction("train_fraction", train_fraction)
     _validate_fraction("validation_fraction", validation_fraction)
     if train_fraction + validation_fraction >= 1.0:
@@ -62,3 +75,6 @@ def split_documents_three(
         [documents[index] for index in indices[train_end:validation_end]],
         [documents[index] for index in indices[validation_end:]],
     )
+
+
+__all__ = ["deduplicate_documents", "split_documents", "split_documents_three"]

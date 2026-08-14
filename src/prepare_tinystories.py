@@ -9,9 +9,13 @@ import numpy as np
 
 from data.datasets import take_token_budget
 from data.manifest import build_manifest
-from data.splits import split_documents_three
+from data.splits import deduplicate_documents, split_documents_three
 from data.tokenizer import build_tokenizer
 from .train import TINYSTORIES_SOURCE
+
+
+def _token_sha256(values: list[int]) -> str:
+    return hashlib.sha256(np.ascontiguousarray(np.asarray(values, dtype=np.uint32)).view(np.uint8)).hexdigest()
 
 
 def main() -> None:
@@ -57,6 +61,7 @@ def main() -> None:
         if count >= args.max_examples:
             break
 
+    documents = deduplicate_documents(documents)
     if len(documents) < 3:
         raise ValueError("TinyStories stream returned fewer than three non-empty documents")
 
@@ -122,6 +127,10 @@ def main() -> None:
         target_validation_tokens=validation_budget,
         target_test_tokens=test_budget,
         token_id_dtype="uint32",
+        train_token_sha256=_token_sha256(train_ids),
+        validation_token_sha256=_token_sha256(validation_ids),
+        test_token_sha256=_token_sha256(test_ids),
+        validation_fraction=args.validation_fraction,
     )
     manifest_data = manifest.to_dict()
     manifest_data["data_file"] = str(args.output)

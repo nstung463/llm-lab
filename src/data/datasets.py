@@ -6,6 +6,7 @@ from collections.abc import Sequence
 import hashlib
 from typing import Any, Iterator
 
+import numpy as np
 import torch
 from torch.utils.data import Dataset
 
@@ -39,7 +40,8 @@ class NextTokenDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
         if stride is not None and stride <= 0:
             raise ValueError("stride must be positive")
 
-        self.tokens = torch.tensor(token_ids, dtype=torch.long)
+        # Preserve numpy memmaps; materialize only the requested window.
+        self.tokens = token_ids
         self.context_length = context_length
         self.stride = context_length if stride is None else stride
         self.starts = list(range(0, len(self.tokens) - context_length, self.stride))
@@ -50,12 +52,16 @@ class NextTokenDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
     def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:
         start = self.starts[index]
         end = start + self.context_length
-        return self.tokens[start:end], self.tokens[start + 1 : end + 1]
+        inputs = np.asarray(self.tokens[start:end], dtype=np.int64)
+        targets = np.asarray(self.tokens[start + 1 : end + 1], dtype=np.int64)
+        return torch.from_numpy(inputs), torch.from_numpy(targets)
 
     @property
     def signature(self) -> str:
         """Identify the exact token stream used by this dataset."""
-        return hashlib.sha256(self.tokens.numpy().tobytes()).hexdigest()
+        digest = hashlib.sha256()
+        digest.update(np.ascontiguousarray(np.asarray(self.tokens)).view(np.uint8))
+        return digest.hexdigest()
 
 
 class StatefulBatchLoader:

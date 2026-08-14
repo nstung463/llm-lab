@@ -4,7 +4,7 @@ from .datasets import NextTokenDataset, StatefulBatchLoader, make_loaders
 from .artifacts import TokenArtifacts, load_token_artifacts
 from .manifest import DatasetManifest, build_manifest, document_sha256
 from .readers import read_documents
-from .splits import split_documents, split_documents_three
+from .splits import deduplicate_documents, split_documents, split_documents_three
 from .tokenizer import (
     BPETokenizer,
     ByteLevelBPE,
@@ -21,6 +21,7 @@ __all__ = [
     "StatefulBatchLoader",
     "build_manifest",
     "document_sha256",
+    "deduplicate_documents",
     "make_loaders",
     "read_documents",
     "split_documents",

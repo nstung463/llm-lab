@@ -9,7 +9,17 @@ from torch.utils.data import DataLoader
 from data import BPETokenizer, build_manifest, load_token_artifacts, split_documents
 from data.datasets import NextTokenDataset, StatefulBatchLoader, take_token_budget
 from data.readers import read_documents
-from data.splits import split_documents_three
+from data.splits import deduplicate_documents, split_documents_three
+
+
+def test_duplicate_documents_are_removed_before_splitting() -> None:
+    documents = ["same", "other", "same", "third"]
+    assert deduplicate_documents(documents) == ["same", "other", "third"]
+    train, validation, test = split_documents_three(documents, 0.6, 0.2, seed=2)
+    assert sum(len(part) for part in (train, validation, test)) == 3
+    assert set(train).isdisjoint(validation)
+    assert set(train).isdisjoint(test)
+    assert set(validation).isdisjoint(test)
 
 
 def test_bpe_and_split_are_deterministic() -> None:
@@ -101,7 +111,9 @@ def test_batch_loader_resume_keeps_order_and_cursor() -> None:
 
 def test_fixed_token_artifact_loader_validates_manifest_contract(tmp_path: Path) -> None:
     tokenizer = BPETokenizer.fit(["a tiny story", "another tiny story"], vocab_size=300, min_frequency=1)
-    tokenizer_path = tmp_path / "tokens.tokenizer.json"
+    artifact_dir = tmp_path / "data"
+    artifact_dir.mkdir()
+    tokenizer_path = artifact_dir / "tokens.tokenizer.json"
     tokenizer.save(tokenizer_path)
     streams = {
         "train": np.asarray(tokenizer.encode_documents(["a tiny story"]), dtype=np.uint32),
@@ -110,9 +122,10 @@ def test_fixed_token_artifact_loader_validates_manifest_contract(tmp_path: Path)
     }
     paths = {}
     for name, values in streams.items():
-        path = tmp_path / f"tokens.{name}.npy"
+        path = artifact_dir / f"tokens.{name}.npy"
         np.save(path, values)
-        paths[name] = str(path)
+        paths[name] = f"data\\tokens.{name}.npy"
+    paths["tokenizer"] = "data\\tokens.tokenizer.json"
     manifest_path = tmp_path / "tokens.manifest.json"
     manifest_path.write_text(
         json.dumps({

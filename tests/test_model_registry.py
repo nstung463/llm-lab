@@ -75,3 +75,29 @@ def test_registry_rejects_unknown_architecture() -> None:
         assert "mha" in str(error)
     else:
         raise AssertionError("unknown architecture must be rejected")
+
+
+def test_registered_attention_models_use_rope_without_absolute_position_tables() -> None:
+    for architecture in available_architectures():
+        model = build_model(architecture, config_for(architecture))
+        assert not any(name.endswith("pos_emb") for name, _ in model.named_modules())
+        if architecture == "v4":
+            assert all(hasattr(block.attn, "rope") for block in model.blocks)
+        elif architecture == "mha":
+            assert all(hasattr(block.att, "rope") for block in model.blocks)
+        elif architecture == "mla":
+            assert all(hasattr(block.att, "rope") for block in model.trf_blocks)
+        else:
+            assert all(hasattr(block.att, "rope") for block in model.trf_blocks)
+
+
+def test_rope_cached_prefix_matches_uncached_for_new_architectures() -> None:
+    tokens = torch.randint(0, 512, (1, 8))
+    for architecture in ("mha", "gqa", "mla", "moe"):
+        model = build_model(architecture, config_for(architecture)).eval()
+        with torch.no_grad():
+            full_logits = model(tokens, use_cache=False)
+            model.reset_kv_cache()
+            model(tokens[:, :5], use_cache=True)
+            cached_logits = model(tokens[:, 5:], use_cache=True)
+        torch.testing.assert_close(full_logits[:, 5:], cached_logits, rtol=1e-5, atol=1e-6)

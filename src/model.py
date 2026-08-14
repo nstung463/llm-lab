@@ -8,6 +8,7 @@ import torch
 from torch import Tensor, nn
 
 from config import ModelConfig
+from rope import RotaryEmbedding
 
 PastKeyValue: TypeAlias = tuple[Tensor, Tensor]
 PastKeyValues: TypeAlias = tuple[PastKeyValue | None, ...]
@@ -43,6 +44,10 @@ class MultiHeadAttention(nn.Module):
         self.v_proj = nn.Linear(cfg.emb_dim, cfg.emb_dim, bias=cfg.qkv_bias)
         self.out_proj = nn.Linear(cfg.emb_dim, cfg.emb_dim)
         self.attn_dropout = nn.Dropout(cfg.dropout)
+        rope_dim = self.head_dim if cfg.rope_dim is None else cfg.rope_dim
+        if rope_dim > self.head_dim:
+            raise ValueError("rope_dim cannot exceed head_dim")
+        self.rope = RotaryEmbedding(rope_dim, cfg.context_length, cfg.rope_base)
 
     def _split_heads(self, x: Tensor) -> Tensor:
         batch, tokens, _ = x.shape
@@ -76,6 +81,19 @@ class MultiHeadAttention(nn.Module):
             past_length = past_keys.shape[2]
             keys = torch.cat((past_keys, keys), dim=2)
             values = torch.cat((past_values, values), dim=2)
+
+        positions = torch.arange(
+            past_length, past_length + query_tokens, device=x.device, dtype=torch.long
+        )
+        queries, current_keys = self.rope(
+            queries,
+            keys[:, :, past_length:, :],
+            positions,
+        )
+        if past_key_value is not None:
+            keys = torch.cat((keys[:, :, :past_length, :], current_keys), dim=2)
+        else:
+            keys = current_keys
 
         key_tokens = keys.shape[2]
         query_positions = torch.arange(past_length, past_length + query_tokens, device=x.device)
@@ -130,7 +148,6 @@ class GPTModel(nn.Module):
         super().__init__()
         self.cfg = cfg
         self.token_embedding = nn.Embedding(cfg.vocab_size, cfg.emb_dim)
-        self.position_embedding = nn.Embedding(cfg.context_length, cfg.emb_dim)
         self.embedding_dropout = nn.Dropout(cfg.dropout)
         self.blocks = nn.ModuleList([TransformerBlock(cfg) for _ in range(cfg.n_layers)])
         self.final_norm = LayerNorm(cfg.emb_dim)
@@ -149,8 +166,7 @@ class GPTModel(nn.Module):
         if tokens + past_length > self.cfg.context_length:
             raise ValueError("input plus cache exceeds context_length; rebuild from the sliding window")
 
-        positions = torch.arange(past_length, past_length + tokens, device=input_ids.device)
-        x = self.embedding_dropout(self.token_embedding(input_ids) + self.position_embedding(positions).unsqueeze(0))
+        x = self.embedding_dropout(self.token_embedding(input_ids))
         present_key_values: list[PastKeyValue | None] = []
         for layer_index, block in enumerate(self.blocks):
             past = None if past_key_values is None else past_key_values[layer_index]
