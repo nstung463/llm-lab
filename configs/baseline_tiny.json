@@ -1,0 +1,22 @@
+{
+  "model": {
+    "vocab_size": 512,
+    "context_length": 32,
+    "emb_dim": 128,
+    "n_heads": 4,
+    "n_layers": 4,
+    "dropout": 0.1,
+    "qkv_bias": false
+  },
+  "training": {
+    "batch_size": 16,
+    "learning_rate": 0.0003,
+    "weight_decay": 0.1,
+    "max_steps": 100,
+    "eval_every": 50,
+    "eval_batches": 8,
+    "grad_clip_norm": 1.0,
+    "seed": 42,
+    "save_every": 50
+  }
+}

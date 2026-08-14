@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llm"
+version = "0.1.0"
+description = "Educational GPT MHA baseline with inference KV cache"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.26", "tiktoken>=0.7", "tokenizers>=0.20", "torch>=2.2"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+data = ["datasets>=3.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# Keep PyTorch CPU-only for local verification. Colab provides its own CUDA build.
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true

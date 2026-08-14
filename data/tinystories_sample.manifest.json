@@ -1,0 +1,10 @@
+{
+  "source": {
+    "id": "roneneldan/TinyStories",
+    "url": "https://huggingface.co/datasets/roneneldan/TinyStories",
+    "license": "CDLA-Sharing-1.0",
+    "license_url": "https://cdla.dev/sharing-1-0/"
+  },
+  "document_count": 1000,
+  "data_file": "data\\tinystories_sample.jsonl"
+}

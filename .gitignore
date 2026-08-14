@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+.pytest_cache/
+runs/
+
+# Generated dataset artifacts; recreate them from the preparation pipeline.
+data/tinystories_pilot_10m.jsonl
+data/tinystories_pilot_10m.manifest.json
+data/tinystories_pilot_10m.tokenizer.json
+data/tinystories_pilot_10m.*.npy
+
+# Notebook/runtime artifacts.
+.ipynb_checkpoints/
+.vscode/
