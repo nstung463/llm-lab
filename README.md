@@ -156,6 +156,87 @@ compare language-modeling quality; compute, cache, and throughput metrics
 compare efficiency and should not be collapsed into a single score without an
 explicit trade-off.
 
+## Standard downstream benchmarks
+
+The project can run the public tasks used in the DeepSeekMoE-style comparison
+through `lm-evaluation-harness`. Install the optional evaluation dependencies:
+
+```powershell
+uv sync --extra eval
+```
+
+### Hugging Face export
+
+Training checkpoints remain in the project's resumable `.pt` format. Export a
+checkpoint separately when you need the standard Hugging Face API:
+
+```powershell
+uv run python -m huggingface.export `
+  --checkpoint runs/architecture_compare_mha/checkpoint.pt `
+  --output runs/architecture_compare_mha/hf `
+  --device cpu
+```
+
+The exporter writes `config.json`, `model.safetensors`, HF tokenizer files and
+the custom AutoClass source files. It validates logits before and after
+`AutoModelForCausalLM.from_pretrained(..., trust_remote_code=True)`. The
+exported directory can be loaded with `AutoModelForCausalLM` and
+`AutoTokenizer`, and supports `generate()` without importing the training
+checkpoint format.
+
+Run a small smoke suite first:
+
+```powershell
+uv run python -m evaluate_benchmarks `
+  --checkpoint runs/architecture_compare_mha/checkpoint.pt `
+  --suite smoke_core `
+  --output runs/architecture_compare_mha/eval `
+  --device cuda
+```
+
+For the standard Hugging Face evaluation path, evaluate the exported model
+with the harness `hf` backend:
+
+```powershell
+uv run python -m evaluate_benchmarks `
+  --model-dir runs/architecture_compare_mha/hf `
+  --backend hf `
+  --suite smoke_core `
+  --output runs/architecture_compare_mha/eval_hf `
+  --device cuda
+```
+
+The custom checkpoint adapter remains available with `--checkpoint` for fast
+development checks. For final benchmark tables, use the exported directory and
+the `hf` backend. The model context length must be large enough for the chosen
+benchmark; `--truncation` is intended only for smoke tests.
+
+The standard suites are configured in
+`configs/evaluation/deepseek_suite.json`:
+
+- `core_zero_shot`: HellaSwag, PIQA, ARC-easy and ARC-challenge;
+- `reading_five_shot`: RACE with five examples;
+- `generation`: HumanEval, MBPP, TriviaQA and NaturalQuestions (`nq_open`).
+
+Run the main multiple-choice suite with:
+
+```powershell
+uv run python -m evaluate_benchmarks `
+  --checkpoint runs/architecture_compare_mha/checkpoint.pt `
+  --suite core_zero_shot `
+  --output runs/architecture_compare_mha/eval_core `
+  --device cuda `
+  --batch-size 4
+```
+
+The runner writes `benchmark_results.json` with task scores and
+reproducibility metadata: architecture, selected checkpoint, tokenizer,
+context length, few-shot count, device, PyTorch version and timestamp. Use the
+same suite, checkpoint policy, tokenizer, context length and batch protocol for
+MHA, GQA, MLA, MoE and V4. HumanEval/MBPP execute generated Python code; run
+that suite only in an isolated environment and pass
+`--confirm-run-unsafe-code` explicitly.
+
 ## Colab 10M architecture benchmark
 
 The Colab protocol is stored in `configs/colab_architecture_10m.json`:

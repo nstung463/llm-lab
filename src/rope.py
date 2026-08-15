@@ -27,7 +27,7 @@ class RotaryEmbedding(nn.Module):
         self.rope_dim = rope_dim
         self.max_seq_len = max_seq_len
 
-    def apply(self, x: Tensor, positions: Tensor) -> Tensor:
+    def apply_rotary(self, x: Tensor, positions: Tensor) -> Tensor:
         if x.ndim != 4:
             raise ValueError("RoPE input must have shape (batch, heads, tokens, head_dim)")
         if positions.ndim != 1 or positions.numel() != x.shape[-2]:
@@ -55,5 +55,5 @@ class RotaryEmbedding(nn.Module):
     ) -> tuple[Tensor, Tensor]:
         if key_positions is None:
             key_positions = query_positions
-        return self.apply(queries, query_positions), self.apply(keys, key_positions)
+        return self.apply_rotary(queries, query_positions), self.apply_rotary(keys, key_positions)
 

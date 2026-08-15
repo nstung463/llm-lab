@@ -9,7 +9,7 @@ def test_rope_matches_reference_split_halves_formula_and_preserves_pass_through_
     x = torch.randn(2, 3, 5, 12)
     positions = torch.tensor([1, 2, 4, 7, 9])
 
-    actual = rope.apply(x, positions)
+    actual = rope.apply_rotary(x, positions)
     inv_freq = 1.0 / (10_000.0 ** (torch.arange(0, 8, 2).float() / 8))
     angles = torch.outer(positions.float(), inv_freq)
     angles = torch.cat((angles, angles), dim=-1)

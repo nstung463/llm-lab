@@ -12,6 +12,14 @@ dependencies = ["matplotlib>=3.8", "numpy>=1.26", "tiktoken>=0.7", "tokenizers>=
 [project.optional-dependencies]
 dev = ["pytest>=8"]
 data = ["datasets>=3.0"]
+hf = ["transformers>=4.45,<5", "safetensors>=0.4"]
+eval = [
+    "lm-eval>=0.4.12",
+    "datasets>=3.0",
+    "accelerate>=1.0",
+    "transformers>=4.45,<5",
+    "safetensors>=0.4",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -24,6 +32,7 @@ py-modules = [
     "compare_architectures",
     "config",
     "evaluate_architectures",
+    "evaluate_benchmarks",
     "model",
     "prepare_tinystories",
     "rope",
@@ -34,7 +43,7 @@ py-modules = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["benchmarking*", "cli*", "data*", "evaluation*", "models*", "training*"]
+include = ["benchmarking*", "cli*", "data*", "evaluation*", "huggingface*", "models*", "training*"]
 
 # Keep PyTorch CPU-only for local verification. Colab provides its own CUDA build.
 [tool.uv.sources]

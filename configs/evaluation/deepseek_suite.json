@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "description": "Small, reproducible benchmark suites inspired by DeepSeekMoE Table 1.",
+  "suites": {
+    "core_zero_shot": {
+      "tasks": [
+        "hellaswag",
+        "piqa",
+        "arc_easy",
+        "arc_challenge"
+      ],
+      "num_fewshot": 0,
+      "limit": null,
+      "log_samples": true
+    },
+    "reading_five_shot": {
+      "tasks": ["race"],
+      "num_fewshot": 5,
+      "limit": null,
+      "log_samples": true
+    },
+    "generation": {
+      "tasks": ["humaneval", "mbpp", "triviaqa", "nq_open"],
+      "num_fewshot": 0,
+      "limit": null,
+      "log_samples": true
+    },
+    "smoke_core": {
+      "tasks": ["hellaswag", "piqa"],
+      "num_fewshot": 0,
+      "limit": 4,
+      "log_samples": true
+    }
+  }
+}
