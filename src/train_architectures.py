@@ -39,6 +39,7 @@ from models.registry import (
 from training.loop import restore_rng_state
 from training.optim import build_adamw
 from training.schedule import cosine_lr, set_optimizer_lr
+from visualization import save_training_plots
 
 
 def parse_args() -> argparse.Namespace:
@@ -338,6 +339,13 @@ def main() -> None:
         else:
             optimizer.step()
 
+        elapsed = max(time.perf_counter() - start_time, 1e-9)
+        tokens_per_second = tokens_seen / elapsed
+        peak_vram_gb = (
+            torch.cuda.max_memory_allocated(device) / (1024**3)
+            if device.type == "cuda"
+            else 0.0
+        )
         if step == 1 or step % training_cfg.eval_every == 0 or step == training_cfg.max_steps:
             train_loss = evaluate(model, train_loader, device, training_cfg.eval_batches)
             validation_loss = evaluate(model, val_loader, device, training_cfg.eval_batches)
@@ -358,7 +366,9 @@ def main() -> None:
                 "learning_rate": learning_rate,
                 "micro_train_loss": step_loss / total_tokens,
                 "grad_norm": float(grad_norm),
-                "elapsed_seconds": time.perf_counter() - start_time,
+                "tokens_per_second": tokens_per_second,
+                "peak_vram_gb": peak_vram_gb,
+                "elapsed_seconds": elapsed,
             }
             history.append(record)
             if validation_loss < best_validation_loss:
@@ -370,19 +380,17 @@ def main() -> None:
                 "sample": sample_text(model, tokenizer, device, train_tokens[:context_length]),
             }, ensure_ascii=True))
 
-        elapsed = max(time.perf_counter() - start_time, 1e-9)
         postfix = {
             "loss": f"{step_loss / total_tokens:.4f}",
             "lr": f"{learning_rate:.2e}",
             "grad": f"{float(grad_norm):.2f}",
-            "tok/s": f"{tokens_seen / elapsed:.0f}",
+            "tok/s": f"{tokens_per_second:.0f}",
             "epoch": f"{tokens_seen / tokens_per_epoch:.2f}",
         }
         if last_validation_loss is not None:
             postfix["val"] = f"{last_validation_loss:.4f}"
         if device.type == "cuda":
-            peak_vram = torch.cuda.max_memory_allocated(device) / (1024 ** 3)
-            postfix["vram"] = f"{peak_vram:.1f}G"
+            postfix["vram"] = f"{peak_vram_gb:.1f}G"
         progress.set_postfix(postfix)
 
         if step % training_cfg.save_every == 0 or step == training_cfg.max_steps:
@@ -400,6 +408,7 @@ def main() -> None:
     torch.save(checkpoint_payload(training_cfg.max_steps, test_loss), args.output / "checkpoint.pt")
     tokenizer.save(args.output / "tokenizer.json")
     (args.output / "metrics.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
+    plot_paths = save_training_plots(history, args.output / "plots", title=f"{args.architecture} training")
     (args.output / "config.json").write_text(json.dumps({"architecture": args.architecture, "model": model_cfg, "training": raw["training"], "data": data_cfg, "model_metadata": model_info}, indent=2), encoding="utf-8")
     print(json.dumps({
         "output": str(args.output),
@@ -407,6 +416,7 @@ def main() -> None:
         "model_metadata": model_info,
         "flops": flop_estimate.as_dict(),
         "estimated_training_flops": estimate_training_flops(model, args.architecture, tokens_seen),
+        "plots": [str(path) for path in plot_paths],
         "device": str(device),
     }))
 

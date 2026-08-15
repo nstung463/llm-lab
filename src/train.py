@@ -16,6 +16,7 @@ from data.tokenizer import build_tokenizer, tokenizer_from_state
 from models.baseline import GPTModel, count_parameters
 from training.loop import evaluate, load_checkpoint, restore_rng_state, save_checkpoint, train
 from training.optim import build_adamw
+from visualization import save_training_plots
 
 
 TINYSTORIES_SOURCE = {
@@ -204,8 +205,10 @@ def main() -> None:
         json.dumps({"test_loss": test_loss, "perplexity": float(torch.exp(torch.tensor(min(test_loss, 20.0))))}, indent=2),
         encoding="utf-8",
     )
-    (args.output / "run.json").write_text(json.dumps({"model": asdict(model_cfg), "training": asdict(training_cfg), "device": str(device), "parameters": count_parameters(model), "test_loss": test_loss, "manifest": manifest.to_dict()}, indent=2), encoding="utf-8")
-    print(json.dumps({"parameters": count_parameters(model), "device": str(device), "last": history[-1], "test_loss": test_loss, "output": str(args.output), "manifest": manifest.to_dict()}, indent=2))
+    plot_paths = save_training_plots(history, args.output / "plots", title="baseline training")
+    run_summary = {"model": asdict(model_cfg), "training": asdict(training_cfg), "device": str(device), "parameters": count_parameters(model), "test_loss": test_loss, "manifest": manifest.to_dict(), "plots": [str(path) for path in plot_paths]}
+    (args.output / "run.json").write_text(json.dumps(run_summary, indent=2), encoding="utf-8")
+    print(json.dumps({"parameters": count_parameters(model), "device": str(device), "last": history[-1], "test_loss": test_loss, "output": str(args.output), "plots": [str(path) for path in plot_paths], "manifest": manifest.to_dict()}, indent=2))
 
 
 if __name__ == "__main__":

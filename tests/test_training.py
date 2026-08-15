@@ -11,6 +11,7 @@ from train_architectures import evaluate as architecture_evaluate
 from training import evaluate, loss_for_batch, train
 from training.schedule import cosine_lr
 from train_architectures import _validate_global_tokens_per_update
+from visualization import save_training_plots
 
 
 def test_cosine_lr_uses_one_based_optimizer_updates() -> None:
@@ -181,3 +182,41 @@ def test_architecture_evaluators_are_token_weighted() -> None:
     result = compare_evaluate(model, batches, torch.device("cpu"), 100)
     assert abs(result["test_loss"] - expected_loss) < 1e-7
     assert result["tokens"] == 8
+
+
+def test_training_plots_support_architecture_history(tmp_path) -> None:
+    history = [
+        {
+            "step": 1,
+            "tokens_seen": 100,
+            "train_loss": 4.0,
+            "validation_loss": 4.2,
+            "learning_rate": 1e-4,
+            "grad_norm": 1.0,
+            "tokens_per_second": 100.0,
+            "peak_vram_gb": 1.0,
+            "elapsed_seconds": 1.0,
+            "estimated_training_flops": 10.0,
+        },
+        {
+            "step": 2,
+            "tokens_seen": 200,
+            "train_loss": 3.5,
+            "validation_loss": 3.8,
+            "learning_rate": 2e-4,
+            "grad_norm": 0.9,
+            "tokens_per_second": 110.0,
+            "peak_vram_gb": 1.1,
+            "elapsed_seconds": 2.0,
+            "estimated_training_flops": 20.0,
+        },
+    ]
+
+    paths = save_training_plots(history, tmp_path, title="test")
+
+    assert {path.name for path in paths} == {
+        "loss_vs_tokens.png",
+        "perplexity_vs_tokens.png",
+        "training_diagnostics.png",
+        "loss_vs_flops.png",
+    }

@@ -176,6 +176,13 @@ def train(
         state.global_step = step
         state.tokens_seen = tokens_seen
         state.epoch = int(getattr(train_loader, "epoch", state.epoch))
+        elapsed = max(time.perf_counter() - start_time, 1e-9)
+        tokens_per_second = tokens_seen / elapsed
+        peak_vram_gb = (
+            torch.cuda.max_memory_allocated(device) / (1024**3)
+            if device.type == "cuda"
+            else 0.0
+        )
         if step == 1 or step % cfg.eval_every == 0 or step == cfg.max_steps:
             train_loss = evaluate(model, train_loader, device, cfg.eval_batches)
             val_loss = evaluate(model, val_loader, device, cfg.eval_batches)
@@ -195,14 +202,16 @@ def train(
                     if state.fractional_epoch is not None
                     else float("nan")
                 ),
+                "elapsed_seconds": elapsed,
+                "tokens_per_second": tokens_per_second,
+                "peak_vram_gb": peak_vram_gb,
             })
             model.train()
-        elapsed = max(time.perf_counter() - start_time, 1e-9)
         postfix = {
             "loss": f"{loss_sum / total_tokens:.4f}",
             "lr": f"{learning_rate:.2e}",
             "grad": f"{float(grad_norm):.2f}",
-            "tok/s": f"{tokens_seen / elapsed:.0f}",
+            "tok/s": f"{tokens_per_second:.0f}",
             "epoch": (
                 f"{state.fractional_epoch:.2f}"
                 if state.fractional_epoch is not None
@@ -212,8 +221,7 @@ def train(
         if last_val_loss is not None:
             postfix["val"] = f"{last_val_loss:.4f}"
         if device.type == "cuda":
-            peak_vram = torch.cuda.max_memory_allocated(device) / (1024 ** 3)
-            postfix["vram"] = f"{peak_vram:.1f}G"
+            postfix["vram"] = f"{peak_vram_gb:.1f}G"
         progress.set_postfix(postfix)
         if step % cfg.save_every == 0 or step == cfg.max_steps:
             if checkpoint_callback is not None:
