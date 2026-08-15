@@ -16,8 +16,26 @@ import torch
 from torch import nn
 
 
-_MOE_EXPERT_LINEAR = re.compile(r"^(?P<layer>.+\.ff)\.(?:gate_proj|up_proj|out_proj)\.(?P<expert>\d+)$")
-_MOE_EXPERT_PARAMETER = re.compile(r"^(?P<layer>.+\.ff)\.(?:gate_proj|up_proj|out_proj)\.(?P<expert>\d+)\.")
+_MOE_EXPERT_LINEAR_PATTERNS = (
+    # moe.py: trf_blocks.0.ff.gate_proj.0
+    re.compile(r"^(?P<layer>.+\.ff)\.(?:gate_proj|up_proj|out_proj)\.(?P<expert>\d+)$"),
+    # v4.py: blocks.0.ffn.experts.0.gate_proj
+    re.compile(r"^(?P<layer>.+\.ffn)\.experts\.(?P<expert>\d+)\.(?:gate_proj|up_proj|out_proj)$"),
+)
+_MOE_EXPERT_PARAMETER_PATTERNS = (
+    # moe.py: trf_blocks.0.ff.gate_proj.0.weight
+    re.compile(r"^(?P<layer>.+\.ff)\.(?:gate_proj|up_proj|out_proj)\.(?P<expert>\d+)\."),
+    # v4.py: blocks.0.ffn.experts.0.gate_proj.weight
+    re.compile(r"^(?P<layer>.+\.ffn)\.experts\.(?P<expert>\d+)\.(?:gate_proj|up_proj|out_proj)\."),
+)
+
+
+def _match_expert_name(name: str, patterns: tuple[re.Pattern[str], ...]):
+    for pattern in patterns:
+        match = pattern.match(name)
+        if match:
+            return match
+    return None
 
 
 @dataclass(frozen=True)
@@ -155,9 +173,9 @@ def collect_kv_cache_stats(model: nn.Module) -> dict[str, int | float]:
 def _linear_flops_per_token(model: nn.Module, architecture: str) -> int:
     """Count 2*in*out for linear layers used by one token.
 
-    MoE registers all experts but routes each token to only top-k experts. The
-    routed expert contribution is therefore adjusted from all experts to the
-    configured active expert count.
+    MoE and V4 register all experts but route each token to only top-k experts.
+    Their routed expert contribution is therefore adjusted from all experts to
+    the configured active expert count.
     """
     total = 0
     expert_flops_by_layer: dict[str, list[int]] = {}
@@ -166,12 +184,12 @@ def _linear_flops_per_token(model: nn.Module, architecture: str) -> int:
             continue
         flops = 2 * module.in_features * module.out_features
         total += flops
-        if architecture == "moe":
-            match = _MOE_EXPERT_LINEAR.match(name)
+        if architecture in {"moe", "v4"}:
+            match = _match_expert_name(name, _MOE_EXPERT_LINEAR_PATTERNS)
             if match:
                 expert_flops_by_layer.setdefault(match.group("layer"), []).append(flops)
 
-    if architecture == "moe" and expert_flops_by_layer:
+    if architecture in {"moe", "v4"} and expert_flops_by_layer:
         num_experts = int(model.training_cfg["num_experts"])
         active_experts = int(model.training_cfg["num_experts_per_tok"])
         all_expert_flops = sum(sum(values) for values in expert_flops_by_layer.values())
@@ -183,16 +201,16 @@ def _linear_flops_per_token(model: nn.Module, architecture: str) -> int:
 def active_parameter_count(model: nn.Module, architecture: str) -> int:
     """Estimate parameters touched by one token, keeping MoE total params separate.
 
-    For dense models this equals total trainable parameters. For MoE, all
-    expert weights remain resident in memory, but only the configured top-k
-    routed experts plus the shared path are counted as active per token.
+    For dense models this equals total trainable parameters. For MoE and V4,
+    all expert weights remain resident in memory, but only the configured
+    top-k routed experts plus the shared path are counted as active per token.
     """
     total = sum(parameter.numel() for parameter in model.parameters() if parameter.requires_grad)
-    if architecture != "moe":
+    if architecture not in {"moe", "v4"}:
         return total
     expert_parameters: dict[str, list[int]] = {}
     for name, parameter in model.named_parameters():
-        match = _MOE_EXPERT_PARAMETER.match(name)
+        match = _match_expert_name(name, _MOE_EXPERT_PARAMETER_PATTERNS)
         if match:
             expert_parameters.setdefault(match.group("layer"), []).append(parameter.numel())
     if not expert_parameters:
