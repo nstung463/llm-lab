@@ -1,9 +1,0 @@
-The small model learns one token at a time.
-Attention can look backward but never forward.
-The cache keeps old keys and values during generation.
-Careful experiments use the same data, seed, and checkpoint.
-
-The small model learns one token at a time.
-Attention can look backward but never forward.
-The cache keeps old keys and values during generation.
-Careful experiments use the same data, seed, and checkpoint.

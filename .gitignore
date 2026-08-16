@@ -4,6 +4,7 @@ __pycache__/
 runs/
 
 # Generated dataset artifacts; recreate them from the preparation pipeline.
+data/
 data/tinystories_pilot_10m.jsonl
 data/tinystories_pilot_10m.manifest.json
 data/tinystories_pilot_10m.tokenizer.json
